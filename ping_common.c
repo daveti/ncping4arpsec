@@ -70,6 +70,15 @@ int ident;			/* process id to identify our packets */
 
 static int screen_width = INT_MAX;
 
+//daveti: timing metrics for big rtt value - workaround for arpsec
+#define NCPING_ARPSEC_RTT_THRESHOLD	10000 // 10ms
+long nreceived_arpsec;
+long nrepeats_arpsec;
+long tmin_arpsec = LONG_MAX;
+long tmax_arpsec;
+long long tsum_arpsec;
+long long tsum2_arpsec;
+
 //daveti: set up the default interface used by ncping
 #define NCPING_ARP_SOCK_IF_NAME		"eth1"
 
@@ -778,12 +787,31 @@ restamp:
 			}
 		}
 		if (!csfailed) {
+//daveti: add support for threshold computing
+			if (triptime >= NCPING_ARPSEC_RTT_THRESHOLD)
+			{
+				--nreceived;
+				++nreceived_arpsec;
+
+				tsum_arpsec += triptime;
+				tsum2_arpsec += (long long)triptime * (long long)triptime;
+				if (triptime < tmin_arpsec)
+					tmin_arpsec = triptime;
+				if (triptime > tmax_arpsec)
+					tmax_arpsec = triptime;
+			}
+			else
+			{
+	
 			tsum += triptime;
 			tsum2 += (long long)triptime * (long long)triptime;
 			if (triptime < tmin)
 				tmin = triptime;
 			if (triptime > tmax)
 				tmax = triptime;
+
+			}
+
 			if (!rtt)
 				rtt = triptime*8;
 			else
@@ -897,11 +925,18 @@ void finish(void)
 
 	putchar('\n');
 	fflush(stdout);
-	printf("--- %s ping statistics ---\n", hostname);
+	printf("--- %s ncping statistics ---\n", hostname);
 	printf("%ld packets transmitted, ", ntransmitted);
 	printf("%ld received", nreceived);
 	if (nrepeats)
 		printf(", +%ld duplicates", nrepeats);
+
+//daveti: add new stats for arpsec with rtt threshold
+	if (nreceived_arpsec)
+		printf(", +%ld received(thresholded)", nreceived_arpsec);
+	if (nrepeats_arpsec)
+		printf(", +%ld duplicates(thresholded)", nrepeats_arpsec);
+
 	if (nchecksum)
 		printf(", +%ld corrupted", nchecksum);
 	if (nerrors)
@@ -921,13 +956,36 @@ void finish(void)
 		tsum2 /= nreceived + nrepeats;
 		tmdev = llsqrt(tsum2 - tsum * tsum);
 
-		printf("rtt min/avg/max/mdev = %ld.%03ld/%lu.%03ld/%ld.%03ld/%ld.%03ld ms",
+		printf("rtt min/avg/max/mdev = %ld.%03ld/%lu.%03ld/%ld.%03ld/%ld.%03ld ms\n",
 		       (long)tmin/1000, (long)tmin%1000,
 		       (unsigned long)(tsum/1000), (long)(tsum%1000),
 		       (long)tmax/1000, (long)tmax%1000,
 		       (long)tmdev/1000, (long)tmdev%1000
 		       );
+
+//daveti: add stats for arpsec beyond the threshold
+		//comma = ",";
+
+		if (nreceived_arpsec + nrepeats_arpsec != 0)
+		{
+			long tmdev_arpsec;
+			tsum_arpsec /= nreceived_arpsec + nrepeats_arpsec;
+			tsum2_arpsec /= nreceived_arpsec + nrepeats_arpsec;
+			tmdev_arpsec = llsqrt(tsum2_arpsec - tsum_arpsec * tsum_arpsec);
+
+                	printf("rtt(thresholded) min/avg/max/mdev = %ld.%03ld/%lu.%03ld/%ld.%03ld/%ld.%03ld ms\n",
+                       		(long)tmin_arpsec/1000, (long)tmin_arpsec%1000,
+                       		(unsigned long)(tsum_arpsec/1000), (long)(tsum_arpsec%1000),
+                       		(long)tmax_arpsec/1000, (long)tmax_arpsec%1000,
+                       		(long)tmdev_arpsec/1000, (long)tmdev_arpsec%1000
+                       		);
+		}
+		else
+		{
+			printf("No arpsec thresholded rtt value");
+		}
 		comma = ", ";
+
 	}
 	if (pipesize > 1) {
 		printf("%spipe %d", comma, pipesize);
